@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: social-mapping-socket-server
+    env: node
+    buildCommand: npm install
+    startCommand: node websocket-server.js
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: MONGODB_URI
+        sync: false
+      - key: CLIENT_URL
+        sync: false
