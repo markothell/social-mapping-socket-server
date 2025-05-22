@@ -7,6 +7,14 @@ const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
 require('dotenv').config();
 
+// Add connection tracking and cleanup intervals
+const CONNECTIONS_CLEANUP_INTERVAL = 30 * 1000; // 30 seconds
+const MAX_RETRY_ATTEMPTS = 3;
+let connectionCount = 0;
+
+// Track operations in progress to prevent duplicates
+const operationsInProgress = new Set();
+
 // Express setup
 const app = express();
 app.use(cors());
@@ -23,6 +31,42 @@ const io = new Server(server, {
   }
 });
 
+// Enhanced connection cleanup with memory management
+setInterval(() => {
+  console.log(`Active connections: ${connectionCount}`);
+  
+  // Force garbage collection if available
+  if (global.gc) {
+    console.log('Running garbage collection');
+    global.gc();
+  }
+  
+  // Log memory usage
+  const memoryUsage = process.memoryUsage();
+  console.log(`Memory usage: ${Math.round(memoryUsage.rss / 1024 / 1024)} MB`);
+  
+  // Clean up stale operations
+  operationsInProgress.clear();
+  
+}, CONNECTIONS_CLEANUP_INTERVAL);
+
+// Add periodic cleanup for stale connections
+setInterval(() => {
+  // Clean up any stale operations
+  if (operationsInProgress.size > 100) {
+    console.warn(`Clearing ${operationsInProgress.size} stale operations`);
+    operationsInProgress.clear();
+  }
+  
+  // Clean up connections that might be stale
+  for (const [socketId, connection] of connections.entries()) {
+    if (!io.sockets.sockets.has(socketId)) {
+      console.log(`Cleaning up stale connection: ${socketId}`);
+      connections.delete(socketId);
+    }
+  }
+}, 60000); // Every minute
+
 // API Routes
 const activityRoutes = require('./server/routes/activities');
 app.use('/api/activities', activityRoutes);
@@ -33,7 +77,24 @@ let isMongoConnected = false;
 // Handle MongoDB connection
 console.log("MongoDB URI:", process.env.MONGODB_URI);
 if (process.env.MONGODB_URI) {
-  mongoose.connect(process.env.MONGODB_URI)
+  mongoose.connect(process.env.MONGODB_URI, {
+    // Connection pool limits to prevent resource exhaustion
+    maxPoolSize: 10,          // Max number of connections in pool
+    minPoolSize: 2,           // Min number of connections in pool
+    maxIdleTimeMS: 30000,     // Close connections after 30s of inactivity
+    
+    // Timeout settings to fail fast instead of hanging
+    serverSelectionTimeoutMS: 5000,  // 5s timeout for server selection
+    socketTimeoutMS: 45000,          // 45s timeout for socket operations
+    connectTimeoutMS: 10000,         // 10s timeout for initial connection
+    
+    // Heartbeat settings
+    heartbeatFrequencyMS: 10000,     // Check server every 10s
+    
+    // Buffer settings
+    bufferMaxEntries: 0,             // Disable mongoose buffering
+    bufferCommands: false,           // Disable mongoose buffering
+  })
   .then(async () => {
     console.log('Connected to MongoDB');
     isMongoConnected = true;
@@ -46,8 +107,10 @@ if (process.env.MONGODB_URI) {
       // Check Activity model schema
       console.log('Activity schema paths:', Object.keys(Activity.schema.paths));
       
-      // Enable mongoose debug mode to see all queries
-      mongoose.set('debug', true);
+      // DISABLE mongoose debug mode in production to reduce memory usage
+      if (process.env.NODE_ENV !== 'production') {
+        mongoose.set('debug', true);
+      }
       
       // Check if activities collection exists
       const activitiesCollection = collections.find(c => c.name === 'activities');
@@ -71,6 +134,33 @@ if (process.env.MONGODB_URI) {
   .catch(err => {
     console.error('MongoDB connection error:', err);
     console.log('Continuing without MongoDB connection...');
+  });
+
+  // Handle MongoDB connection events
+  const db = mongoose.connection;
+  
+  db.on('error', (error) => {
+    console.error('MongoDB connection error:', error);
+  });
+
+  db.on('disconnected', () => {
+    console.log('MongoDB disconnected, attempting to reconnect...');
+  });
+
+  db.on('reconnected', () => {
+    console.log('MongoDB reconnected');
+  });
+  
+  // Graceful shutdown
+  process.on('SIGINT', async () => {
+    try {
+      await mongoose.connection.close();
+      console.log('MongoDB connection closed due to app termination');
+      process.exit(0);
+    } catch (error) {
+      console.error('Error closing MongoDB connection:', error);
+      process.exit(1);
+    }
   });
 }
 
@@ -174,101 +264,120 @@ io.on('connection', (socket) => {
   });
     
   // Handle leaving an activity
-  socket.on('leave_activity', async ({ activityId, userId, userName }) => {
-    if (!userId) return;
-    
-    console.log(`User ${userName || userId} left activity ${activityId}`);
-    
-    // Update connections map
-    const connection = connections.get(socket.id);
-    if (connection) {
-      connection.activityIds.delete(activityId);
+  // Fixed leave_activity handler with proper error handling and deduplication
+  socket.on('leave_activity', async ({ activityId, userId }) => {
+    if (!userId || !activityId) {
+      console.warn('leave_activity called without required parameters');
+      return;
     }
     
-    // Remove user from activity participants in memory
-    if (activities.has(activityId)) {
-      activities.get(activityId).delete(userId);
-      
-      // Clean up empty activities
-      if (activities.get(activityId).size === 0) {
-        activities.delete(activityId);
-      }
+    // Create operation key to prevent duplicates
+    const operationKey = `leave_${activityId}_${userId}`;
+    if (operationsInProgress.has(operationKey)) {
+      console.log(`Leave operation already in progress for ${userId} in ${activityId}`);
+      return;
     }
     
-    // Leave socket.io room
-    socket.leave(activityId);
+    operationsInProgress.add(operationKey);
     
-    // Use atomic update to avoid concurrency issues
     try {
-      // Update MongoDB directly using updateOne for atomic operation
-      const result = await Activity.updateOne(
-        { 
-          id: activityId, 
-          "participants.id": userId 
-        },
-        { 
-          $set: { 
-            "participants.$.isConnected": false,
-            updatedAt: new Date()
-          } 
-        }
-      );
+      console.log(`User ${userId} leaving activity ${activityId}`);
       
-      console.log(`Updated participant ${userId} connection status in activity ${activityId}, modified: ${result.modifiedCount}`);
-    } catch (error) {
-      console.error(`Error updating participant connection status for ${userId} in activity ${activityId}:`, error);
-    }
-    
-    // Get fresh activity data after update and send to clients
-    try {
-      // Get all participants from database to ensure we include disconnected users
-      const activity = await Activity.findOne({ id: activityId });
-      if (activity) {
-        // Create a map of connected users from the activities map
-        const connectedUsers = new Set();
-        if (activities.has(activityId)) {
-          activities.get(activityId).forEach(id => connectedUsers.add(id));
+      // Update connections map
+      const connection = connections.get(socket.id);
+      if (connection) {
+        connection.activityIds.delete(activityId);
+      }
+      
+      // Remove from in-memory activity tracking
+      if (activities.has(activityId) && activities.get(activityId).has(userId)) {
+        activities.get(activityId).delete(userId);
+        
+        // Clean up empty activities
+        if (activities.get(activityId).size === 0) {
+          activities.delete(activityId);
         }
         
-        // Create a list of all participants with correct connection status
-        const fullParticipantsList = activity.participants.map(p => {
-          // Ensure every participant has a name
-          const name = p.name || p.userName || `User-${p.id.substring(0, 6)}`;
-          
-          return {
-            id: p.id,
-            name,
-            isConnected: connectedUsers.has(p.id)
-          };
-        });
+        socket.leave(activityId);
         
-        // Log the participants list for debugging
-        console.log(`Participant list for activity ${activityId} after user ${userId} left:`, 
-          fullParticipantsList.map(p => `${p.name} (${p.id}): ${p.isConnected ? 'connected' : 'disconnected'}`));
+        // Update database with retry logic and timeout
+        let retryCount = 0;
+        let updateSuccessful = false;
         
-        io.to(activityId).emit('participants_updated', {
-          activityId,
-          participants: fullParticipantsList
-        });
+        while (retryCount < MAX_RETRY_ATTEMPTS && !updateSuccessful) {
+          try {
+            console.log(`Attempting to update participant status (attempt ${retryCount + 1}/${MAX_RETRY_ATTEMPTS})`);
+            
+            const result = await Promise.race([
+              Activity.updateOne(
+                { 
+                  id: activityId, 
+                  "participants.id": userId 
+                },
+                { 
+                  $set: { 
+                    "participants.$.isConnected": false,
+                    updatedAt: new Date()
+                  } 
+                }
+              ),
+              new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Database operation timeout')), 5000)
+              )
+            ]);
+            
+            if (result.modifiedCount > 0) {
+              console.log(`Successfully updated participant ${userId} status in activity ${activityId}`);
+              updateSuccessful = true;
+            } else {
+              console.log(`No participant found to update for user ${userId} in activity ${activityId}`);
+              updateSuccessful = true; // Don't retry if participant doesn't exist
+            }
+            
+          } catch (error) {
+            retryCount++;
+            console.error(`Database update attempt ${retryCount} failed:`, error.message);
+            
+            if (retryCount < MAX_RETRY_ATTEMPTS) {
+              // Exponential backoff
+              await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
+            }
+          }
+        }
         
-        console.log(`Sent updated participants list with ${fullParticipantsList.length} users for activity ${activityId}`);
-      } else {
-        // Fall back to in-memory list if DB query fails
-        if (activities.has(activityId)) {
-          const participants = Array.from(activities.get(activityId)).map(id => ({
-            id,
-            name: id === userId ? (userName || `User-${id.substring(0, 6)}`) : `User-${id.substring(0, 6)}`,
-            isConnected: true,
-          }));
-          
-          io.to(activityId).emit('participants_updated', {
-            activityId,
-            participants
-          });
+        if (!updateSuccessful) {
+          console.error(`Failed to update participant status after ${MAX_RETRY_ATTEMPTS} attempts for user ${userId}`);
+        }
+        
+        // Send participant updates regardless of database success
+        try {
+          const activity = await Activity.findOne({ id: activityId }).lean();
+          if (activity) {
+            const connectedUsers = new Set();
+            if (activities.has(activityId)) {
+              activities.get(activityId).forEach(id => connectedUsers.add(id));
+            }
+            
+            const fullParticipantsList = activity.participants.map(p => ({
+              id: p.id,
+              name: p.name || `User-${p.id.substring(0, 6)}`,
+              isConnected: connectedUsers.has(p.id)
+            }));
+            
+            io.to(activityId).emit('participants_updated', {
+              activityId,
+              participants: fullParticipantsList
+            });
+          }
+        } catch (error) {
+          console.error(`Error sending participant updates: ${error.message}`);
         }
       }
+      
     } catch (error) {
-      console.error(`Error sending participants list after user ${userId} left activity ${activityId}:`, error);
+      console.error(`Error in leave_activity handler: ${error.message}`);
+    } finally {
+      operationsInProgress.delete(operationKey);
     }
   });
   
@@ -453,81 +562,77 @@ io.on('connection', (socket) => {
   
   // Handle disconnection
   socket.on('disconnect', async () => {
-    console.log(`User disconnected: ${socket.id}`);
+    connectionCount--;
+    console.log(`User disconnected: ${socket.id} (Total: ${connectionCount})`);
     
     const connection = connections.get(socket.id);
-    if (connection) {
-      // For each activity this user was in
-      for (const activityId of connection.activityIds) {
-        if (activities.has(activityId)) {
-          // Remove user from activity in memory
-          activities.get(activityId).delete(connection.userId);
-          
-          // Update the MongoDB database to set isConnected = false for this user
-          try {
-            const activity = await Activity.findOne({ id: activityId });
-            if (activity) {
-              const participant = activity.participants.find(p => p.id === connection.userId);
-              if (participant) {
-                participant.isConnected = false;
-                activity.updatedAt = new Date();
-                await activity.save();
-                console.log(`Updated participant ${connection.userId} to isConnected=false in activity ${activityId} after disconnect`);
-              }
-            }
-          } catch (error) {
-            console.error(`Error updating participant connection status for ${connection.userId} in activity ${activityId}:`, error);
-          }
-          
-          // Create full participants list including disconnected users
-          try {
-            // Get all participants from database to ensure we include disconnected users
-            const activity = await Activity.findOne({ id: activityId });
-            if (activity) {
-              // Create a list of all participants with correct connection status
-              const fullParticipantsList = activity.participants.map(p => ({
-                id: p.id,
-                name: p.name,
-                isConnected: p.id === connection.userId ? false : 
-                    activities.has(activityId) && activities.get(activityId).has(p.id)
-              }));
-              
-              io.to(activityId).emit('participants_updated', {
-                activityId,
-                participants: fullParticipantsList
-              });
-              
-              console.log(`Sent updated participants list with ${fullParticipantsList.length} users for activity ${activityId} after disconnect`);
-            } else {
-              // Fall back to in-memory list if DB query fails
-              if (activities.has(activityId)) {
-                const participants = Array.from(activities.get(activityId)).map(id => ({
-                  id,
-                  isConnected: true,
-                }));
-                
-                io.to(activityId).emit('participants_updated', {
-                  activityId,
-                  participants
-                });
-              }
-            }
-          } catch (error) {
-            console.error(`Error sending participants list after user ${connection.userId} disconnected from activity ${activityId}:`, error);
-          }
-          
-          // Clean up empty activities
-          if (activities.get(activityId).size === 0) {
-            activities.delete(activityId);
-          }
-        }
-      }
+    if (connection && connection.userId) {
+      const userId = connection.userId;
       
-      // Remove connection
-      connections.delete(socket.id);
+      // Process each activity this user was in
+      const activityPromises = Array.from(connection.activityIds).map(async (activityId) => {
+        const operationKey = `disconnect_${activityId}_${userId}`;
+        if (operationsInProgress.has(operationKey)) {
+          return;
+        }
+        
+        operationsInProgress.add(operationKey);
+        
+        try {
+          if (activities.has(activityId)) {
+            activities.get(activityId).delete(userId);
+            
+            // Clean up empty activities
+            if (activities.get(activityId).size === 0) {
+              activities.delete(activityId);
+            }
+          }
+          
+          // Update database with timeout and limited retries
+          try {
+            await Promise.race([
+              Activity.updateOne(
+                { 
+                  id: activityId, 
+                  "participants.id": userId 
+                },
+                { 
+                  $set: { 
+                    "participants.$.isConnected": false,
+                    updatedAt: new Date()
+                  } 
+                }
+              ),
+              new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Timeout')), 3000)
+              )
+            ]);
+            
+            console.log(`Updated participant ${userId} to disconnected in activity ${activityId}`);
+          } catch (error) {
+            console.error(`Database update failed for disconnect: ${error.message}`);
+            // Don't retry on disconnect - it's not critical
+          }
+          
+        } finally {
+          operationsInProgress.delete(operationKey);
+        }
+      });
+      
+      // Wait for all activity updates to complete (with timeout)
+      try {
+        await Promise.race([
+          Promise.allSettled(activityPromises),
+          new Promise(resolve => setTimeout(resolve, 10000)) // 10s max wait
+        ]);
+      } catch (error) {
+        console.error('Error processing disconnect activities:', error.message);
+      }
     }
+    
+    // Clean up connection
+    connections.delete(socket.id);
   });
-});
 
 // Start the server
 const PORT = process.env.PORT || 3001;
