@@ -1,15 +1,23 @@
-# Social Mapping WebSocket Server
 
-WebSocket server for the Social Mapping collaborative application.
+---
 
-## Setup
+### 🗂 `/social-mapping-socket-server/README.md`
+```md
+# Social Mapping WebSocket Server (Production Only)
 
-1. Install dependencies: `npm install`
-2. Create a `.env` file based on `.env.example`
-3. Start the server: `npm start`
+This folder contains the standalone WebSocket server used in production, hosted on Render.
 
-## Environment Variables
+## Deployment
 
-- `PORT` - Port to run the server on (default: 3001)
-- `MONGODB_URI` - MongoDB connection string
-- `CLIENT_URL` - URL of the client application
+- Deployed via Render (auto from GitHub)
+- Connects to production MongoDB (`SMapApp-prod`)
+
+## Key Environment Variables
+
+- `MONGODB_URI` – points to production Atlas cluster
+- `CLIENT_URL` – for CORS (usually Vercel frontend)
+- `PORT` – (usually 3001)
+
+## Local Development
+
+⚠️ Not intended for local use — use the embedded server in `social-mapping-nextjs` for that.

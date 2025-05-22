@@ -188,7 +188,11 @@ router.patch('/:id', async (req, res) => {
     }
   } catch (err) {
     console.error(`Error updating activity ${req.params.id}:`, err);
-    res.status(500).json({ message: err.message || 'Unknown server error' });
+    res.status(500).json({ 
+      message: err.message || 'Unknown server error',
+      stack: err.stack || 'No stack trace',
+      requestBody: req.body
+    });
   }
 });
 
