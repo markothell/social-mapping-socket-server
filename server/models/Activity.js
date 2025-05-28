@@ -1,4 +1,16 @@
 //server/models/Activity.js
+//
+// ⚠️  CRITICAL: DUAL MODEL ARCHITECTURE ⚠️  
+// This MongoDB schema MUST stay in sync with src/models/Activity.ts (TypeScript interface)
+//
+// When updating this model:
+// 1. Update src/models/Activity.ts TypeScript interface
+// 2. Update this MongoDB schema
+// 3. Restart this server (kill websocket-server.js process, then restart)
+// 4. Test that data saves/loads correctly
+//
+// Common issue: Frontend saves data but this schema strips unknown fields
+// Solution: Always update BOTH models when adding new fields
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
 
@@ -78,28 +90,47 @@ const rankingSchema = new Schema({
 const settingsSchema = new Schema({
   entryView: {
     title: String,
+    hostName: String,
     description: String
   },
   tagCreation: {
+    coreQuestion: String,
     instruction: String,
     enableVoting: { type: Boolean, default: true },
-    voteThreshold: { type: Number, default: 1 }
+    voteThreshold: { type: Number, default: 1 },
+    thresholdType: { 
+      type: String, 
+      enum: ['off', 'minimum', 'topN'], 
+      default: 'minimum' 
+    },
+    minimumVotes: { type: Number },
+    topNCount: { type: Number }
   },
   mapping: {
+    coreQuestion: String,
     xAxisLabel: String,
     xAxisLeftLabel: String,
     xAxisRightLabel: String,
+    xAxisMinLabel: String,
+    xAxisMaxLabel: String,
     yAxisLabel: String,
     yAxisTopLabel: String,
     yAxisBottomLabel: String,
+    yAxisMinLabel: String,
+    yAxisMaxLabel: String,
     gridSize: { type: Number, default: 4 },
     enableAnnotations: { type: Boolean, default: true },
-    maxAnnotationLength: { type: Number, default: 280 }
+    maxAnnotationLength: { type: Number, default: 280 },
+    instruction: String,
+    contextInstructions: String
   },
   ranking: {
     orderType: { type: String, enum: ['ascending', 'descending'], default: 'ascending' },
     context: String,
     topRankMeaning: String
+  },
+  results: {
+    requireReciprocalSharing: { type: Boolean, default: false }
   }
 });
 

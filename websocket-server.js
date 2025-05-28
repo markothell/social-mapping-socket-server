@@ -492,13 +492,20 @@ io.on('connection', (socket) => {
                 userName: data.vote.userName,
                 timestamp: new Date(data.vote.timestamp)
               });
+            }
+            
+            // Update tag status based on current vote count and threshold
+            const tagCreationSettings = activity.settings?.tagCreation;
+            if (tagCreationSettings?.enableVoting) {
+              const thresholdType = tagCreationSettings.thresholdType || 'minimum';
+              const minimumVotes = tagCreationSettings.minimumVotes || tagCreationSettings.voteThreshold || 1;
               
-              if (
-                activity.settings.tagCreation?.enableVoting && 
-                tag.status === 'pending' && 
-                tag.votes.length >= activity.settings.tagCreation.voteThreshold
-              ) {
-                tag.status = 'approved';
+              if (thresholdType === 'minimum') {
+                if (tag.status === 'pending' && tag.votes.length >= minimumVotes) {
+                  tag.status = 'approved';
+                } else if (tag.status === 'approved' && tag.votes.length < minimumVotes) {
+                  tag.status = 'pending';
+                }
               }
             }
             
