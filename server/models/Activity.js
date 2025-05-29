@@ -58,6 +58,7 @@ const tagSchema = new Schema({
 // Define position schema for mappings
 const positionSchema = new Schema({
   tagId: { type: String, required: true },
+  instanceId: String, // For multiple instances of the same tag
   x: { type: Number, required: true },
   y: { type: Number, required: true },
   annotation: String

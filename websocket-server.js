@@ -507,6 +507,8 @@ io.on('connection', (socket) => {
                   tag.status = 'pending';
                 }
               }
+              // Note: topN threshold requires complex recalculation handled by hybridActivityService
+              // to avoid race conditions between multiple processing systems
             }
             
             activity.updatedAt = new Date();
