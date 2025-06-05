@@ -161,7 +161,7 @@ const activitySchema = new Schema({
   mappings: [mappingSchema],
   rankings: [rankingSchema],
   hostName: String,
-  ownerId: { type: String, required: true, default: 'default-admin' },
+  ownerId: { type: String, required: true, default: 'teleodelic@gmail.com' },
   ownerName: { type: String, required: true, default: 'Mo' },
   permissions: {
     isPublic: { type: Boolean, default: true },
