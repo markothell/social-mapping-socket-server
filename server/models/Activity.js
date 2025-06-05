@@ -159,7 +159,19 @@ const activitySchema = new Schema({
   },
   tags: [tagSchema],
   mappings: [mappingSchema],
-  rankings: [rankingSchema]
+  rankings: [rankingSchema],
+  hostName: String,
+  ownerId: { type: String, required: true, default: 'default-admin' },
+  ownerName: { type: String, required: true, default: 'Mo' },
+  permissions: {
+    isPublic: { type: Boolean, default: true },
+    allowGuestParticipants: { type: Boolean, default: true },
+    visibility: { 
+      type: String, 
+      enum: ['public', 'unlisted', 'private'],
+      default: 'public'
+    }
+  }
 });
 
 module.exports = mongoose.model('Activity', activitySchema);
