@@ -22,14 +22,24 @@ const operationsInProgress = new Set();
 
 // Express setup
 const app = express();
-app.use(cors());
+
+// Parse CLIENT_URL to handle multiple origins for Express CORS
+const allowedOrigins = process.env.CLIENT_URL 
+  ? process.env.CLIENT_URL.split(',').map(url => url.trim())
+  : ["http://localhost:3000"];
+
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true
+}));
 app.use(bodyParser.json());
 
 // Create server ONCE
 const server = http.createServer(app);
+
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    origin: allowedOrigins,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
     allowedHeaders: ["my-custom-header"],
     credentials: true
@@ -645,5 +655,5 @@ const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`🚀 WebSocket server running on port ${PORT}`);
   console.log(`📊 MongoDB connected: ${isMongoConnected}`);
-  console.log(`🌐 CORS origin: ${process.env.CLIENT_URL || "http://localhost:3000"}`);
+  console.log(`🌐 CORS origins: ${allowedOrigins.join(', ')}`);
 });
