@@ -473,4 +473,74 @@ router.patch('/:id/complete', async (req, res) => {
   }
 });
 
+// Load data into activity
+router.post('/:id/load-data', async (req, res) => {
+  try {
+    console.log(`Loading data into activity ${req.params.id}`);
+    
+    const activity = await Activity.findOne({ id: req.params.id });
+    if (!activity) {
+      return res.status(404).json({ message: 'Activity not found' });
+    }
+    
+    const { participants, tags, mappings, phase } = req.body;
+    
+    // Load participants if provided
+    if (participants) {
+      // Merge participants, avoiding duplicates
+      const existingParticipantIds = new Set(activity.participants.map(p => p.id));
+      const newParticipants = participants.filter(p => !existingParticipantIds.has(p.id));
+      activity.participants.push(...newParticipants);
+      console.log(`Added ${newParticipants.length} new participants`);
+    }
+    
+    // Load tags if provided
+    if (tags) {
+      // Merge tags, avoiding duplicates
+      const existingTagIds = new Set(activity.tags.map(t => t.id));
+      const newTags = tags.filter(t => !existingTagIds.has(t.id));
+      activity.tags.push(...newTags);
+      console.log(`Added ${newTags.length} new tags`);
+    }
+    
+    // Load mappings if provided
+    if (mappings) {
+      // Merge mappings, replacing existing ones for the same user
+      mappings.forEach(newMapping => {
+        const existingMappingIndex = activity.mappings.findIndex(m => m.userId === newMapping.userId);
+        if (existingMappingIndex !== -1) {
+          activity.mappings[existingMappingIndex] = newMapping;
+        } else {
+          activity.mappings.push(newMapping);
+        }
+      });
+      console.log(`Loaded ${mappings.length} mappings`);
+    }
+    
+    // Update phase if provided
+    if (phase) {
+      activity.phase = phase;
+      console.log(`Set phase to ${phase}`);
+    }
+    
+    activity.updatedAt = new Date();
+    const updatedActivity = await activity.save();
+    
+    console.log(`Successfully loaded data into activity ${req.params.id}`);
+    res.json({
+      message: 'Data loaded successfully',
+      activity: updatedActivity,
+      summary: {
+        participantsLoaded: participants?.length || 0,
+        tagsLoaded: tags?.length || 0,
+        mappingsLoaded: mappings?.length || 0,
+        phaseSet: phase || null
+      }
+    });
+  } catch (err) {
+    console.error(`Error loading data into activity ${req.params.id}:`, err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
 module.exports = router;
