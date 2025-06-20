@@ -28,8 +28,25 @@ const allowedOrigins = process.env.CLIENT_URL
   ? process.env.CLIENT_URL.split(',').map(url => url.trim())
   : ["http://localhost:3000"];
 
+console.log('🌐 CORS origins:', allowedOrigins);
+console.log('🔍 Raw CLIENT_URL:', process.env.CLIENT_URL);
+
 app.use(cors({
-  origin: allowedOrigins,
+  origin: function (origin, callback) {
+    console.log('🔍 Incoming origin:', origin);
+    console.log('🔍 Allowed origins:', allowedOrigins);
+    
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      console.log('✅ Origin allowed:', origin);
+      callback(null, true);
+    } else {
+      console.log('❌ Origin blocked:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
