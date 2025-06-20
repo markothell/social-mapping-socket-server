@@ -160,11 +160,14 @@ router.patch('/:id', async (req, res) => {
     // This avoids the optimistic concurrency control issues
     try {
       const updateFields = { ...req.body, updatedAt: new Date() };
+      console.log(`Server: Update fields being set:`, JSON.stringify(updateFields, null, 2));
       
       const result = await Activity.updateOne(
         { id: req.params.id },
         { $set: updateFields }
       );
+      
+      console.log(`Server: Update result:`, result);
       
       if (result.modifiedCount === 0) {
         console.warn(`No documents were modified when updating activity ${req.params.id}`);

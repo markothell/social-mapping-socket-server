@@ -15,6 +15,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",
+    "mongoose": "^8.13.2",
     "next": "15.2.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -31,7 +32,6 @@
     "concurrently": "^8.2.2",
     "eslint": "^9",
     "eslint-config-next": "15.2.4",
-    "mongoose": "^8.13.2",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
