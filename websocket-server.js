@@ -39,11 +39,17 @@ app.use(cors({
     // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
     
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    // Normalize origins by removing trailing slashes for comparison
+    const normalizedOrigin = origin.replace(/\/$/, '');
+    const normalizedAllowed = allowedOrigins.map(url => url.replace(/\/$/, ''));
+    
+    if (normalizedAllowed.indexOf(normalizedOrigin) !== -1) {
       console.log('✅ Origin allowed:', origin);
       callback(null, true);
     } else {
       console.log('❌ Origin blocked:', origin);
+      console.log('🔍 Normalized origin:', normalizedOrigin);
+      console.log('🔍 Normalized allowed:', normalizedAllowed);
       callback(new Error('Not allowed by CORS'));
     }
   },
