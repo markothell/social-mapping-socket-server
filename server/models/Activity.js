@@ -109,14 +109,8 @@ const settingsSchema = new Schema({
   },
   mapping: {
     coreQuestion: String,
-    xAxisLabel: String,
-    xAxisLeftLabel: String,
-    xAxisRightLabel: String,
     xAxisMinLabel: String,
     xAxisMaxLabel: String,
-    yAxisLabel: String,
-    yAxisTopLabel: String,
-    yAxisBottomLabel: String,
     yAxisMinLabel: String,
     yAxisMaxLabel: String,
     gridSize: { type: Number, default: 4 },
@@ -131,7 +125,7 @@ const settingsSchema = new Schema({
     topRankMeaning: String
   },
   results: {
-    requireReciprocalSharing: { type: Boolean, default: false }
+    instruction: String
   }
 });
 
