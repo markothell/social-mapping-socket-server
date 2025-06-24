@@ -12,9 +12,15 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
 
-// Add connection tracking and cleanup intervals
-const CONNECTIONS_CLEANUP_INTERVAL = 30 * 1000; // 30 seconds
+// Add connection tracking and cleanup intervals - environment dependent
+const CONNECTIONS_CLEANUP_INTERVAL = process.env.NODE_ENV === 'production' ? 30 * 1000 : 10 * 1000; // Prod: 30s, Dev: 10s
+const STALE_CONNECTION_CLEANUP_INTERVAL = process.env.NODE_ENV === 'production' ? 120 * 1000 : 30 * 1000; // Prod: 2min, Dev: 30s
 const MAX_RETRY_ATTEMPTS = 3;
+
+// Connection limits based on server capacity
+const MAX_CONNECTIONS = process.env.MAX_CONNECTIONS || (process.env.NODE_ENV === 'production' ? 15 : 25); // Render: 15, Dev: 25
+const SOFT_LIMIT = Math.floor(MAX_CONNECTIONS * 0.8); // 80% of max = warning threshold
+
 let connectionCount = 0;
 
 // Track operations in progress to prevent duplicates
@@ -82,39 +88,82 @@ let User = null;
 
 // Enhanced connection cleanup with memory management
 setInterval(() => {
-  console.log(`Active connections: ${connectionCount}`);
+  const memoryUsage = process.memoryUsage();
+  const rssInMB = Math.round(memoryUsage.rss / 1024 / 1024);
+  const heapUsedInMB = Math.round(memoryUsage.heapUsed / 1024 / 1024);
   
-  // Force garbage collection if available
-  if (global.gc) {
-    console.log('Running garbage collection');
-    global.gc();
+  // Always log basic stats
+  console.log(`Connections: ${connectionCount}, Activities: ${activities.size}, Memory: RSS ${rssInMB}MB, Heap ${heapUsedInMB}MB`);
+  
+  // Production: Less verbose logging, focus on warnings
+  if (process.env.NODE_ENV === 'production') {
+    // Only log warnings in production
+    if (rssInMB > 1000) console.warn(`⚠️ High memory usage: ${rssInMB}MB RSS`);
+    if (connectionCount > 200) console.warn(`⚠️ High connection count: ${connectionCount}`);
+    if (activities.size > 50) console.warn(`⚠️ High activity count: ${activities.size}`);
+  } else {
+    // Development: More detailed logging
+    console.log(`Connection map size: ${connections.size}`);
+    if (operationsInProgress.size > 0) {
+      console.log(`Operations in progress: ${operationsInProgress.size}`);
+    }
   }
   
-  // Log memory usage
-  const memoryUsage = process.memoryUsage();
-  console.log(`Memory usage: ${Math.round(memoryUsage.rss / 1024 / 1024)} MB`);
-  
   // Clean up stale operations
-  operationsInProgress.clear();
+  if (operationsInProgress.size > (process.env.NODE_ENV === 'production' ? 200 : 50)) {
+    console.log(`Clearing ${operationsInProgress.size} stale operations`);
+    operationsInProgress.clear();
+  }
+  
+  // Force garbage collection if available (production: less frequent)
+  const gcChance = process.env.NODE_ENV === 'production' ? 0.05 : 0.1; // 5% prod, 10% dev
+  if (global.gc && Math.random() < gcChance) {
+    global.gc();
+  }
   
 }, CONNECTIONS_CLEANUP_INTERVAL);
 
 // Add periodic cleanup for stale connections
 setInterval(() => {
-  // Clean up any stale operations
-  if (operationsInProgress.size > 100) {
-    console.warn(`Clearing ${operationsInProgress.size} stale operations`);
-    operationsInProgress.clear();
-  }
+  let cleaned = 0;
   
   // Clean up connections that might be stale
   for (const [socketId, connection] of connections.entries()) {
     if (!io.sockets.sockets.has(socketId)) {
       console.log(`Cleaning up stale connection: ${socketId}`);
       connections.delete(socketId);
+      cleaned++;
+      
+      // Also clean up from activities map
+      if (connection && connection.userId) {
+        for (const activityId of connection.activityIds || []) {
+          if (activities.has(activityId)) {
+            activities.get(activityId).delete(connection.userId);
+            // Clean up empty activities
+            if (activities.get(activityId).size === 0) {
+              activities.delete(activityId);
+              console.log(`Cleaned up empty activity: ${activityId}`);
+            }
+          }
+        }
+      }
     }
   }
-}, 60000); // Every minute
+  
+  // Clean up activities with no participants
+  let emptyActivities = 0;
+  for (const [activityId, participants] of activities.entries()) {
+    if (participants.size === 0) {
+      activities.delete(activityId);
+      emptyActivities++;
+    }
+  }
+  
+  if (cleaned > 0 || emptyActivities > 0) {
+    console.log(`Cleanup complete: ${cleaned} stale connections, ${emptyActivities} empty activities removed`);
+  }
+  
+}, STALE_CONNECTION_CLEANUP_INTERVAL);
 
 // Function to safely get participants from activities map
 function getActivityParticipants(activityId) {
@@ -152,9 +201,9 @@ console.log("MongoDB URI:", process.env.MONGODB_URI ? "Set" : "Not set");
 if (process.env.MONGODB_URI) {
   mongoose.connect(process.env.MONGODB_URI, {
     // Connection pool limits to prevent resource exhaustion
-    maxPoolSize: 10,          // Max number of connections in pool
-    minPoolSize: 2,           // Min number of connections in pool
-    maxIdleTimeMS: 30000,     // Close connections after 30s of inactivity
+    maxPoolSize: process.env.NODE_ENV === 'production' ? 20 : 3,    // Production: 20, Dev: 3
+    minPoolSize: process.env.NODE_ENV === 'production' ? 5 : 1,     // Production: 5, Dev: 1
+    maxIdleTimeMS: process.env.NODE_ENV === 'production' ? 30000 : 15000, // Production: 30s, Dev: 15s
     
     // Timeout settings to fail fast instead of hanging
     serverSelectionTimeoutMS: 5000,  // 5s timeout for server selection
@@ -242,11 +291,21 @@ if (process.env.MONGODB_URI) {
 
 // Add a health check route
 app.get('/health', (req, res) => {
+  const capacityStatus = connectionCount >= MAX_CONNECTIONS ? 'full' : 
+                        connectionCount >= SOFT_LIMIT ? 'high' : 'normal';
+  
   res.json({ 
     status: 'ok', 
     message: 'WebSocket server is running',
     mongodb: isMongoConnected ? 'connected' : 'disconnected',
     connections: connectionCount,
+    capacity: {
+      current: connectionCount,
+      max: MAX_CONNECTIONS,
+      softLimit: SOFT_LIMIT,
+      status: capacityStatus,
+      availableSlots: Math.max(0, MAX_CONNECTIONS - connectionCount)
+    },
     apiRoutesLoaded: isMongoConnected && Activity ? true : false
   });
 });
@@ -268,9 +327,40 @@ async function safeDbOperation(operation, fallback = null) {
 
 // Handle socket connections
 io.on('connection', (socket) => {
+  // Check connection limits before accepting
+  if (connectionCount >= MAX_CONNECTIONS) {
+    console.log(`❌ Connection rejected: at capacity (${connectionCount}/${MAX_CONNECTIONS})`);
+    socket.emit('connection_rejected', {
+      reason: 'capacity_full',
+      message: 'Sorry! We\'re at capacity right now. Please try again in a few minutes.',
+      currentConnections: connectionCount,
+      maxConnections: MAX_CONNECTIONS,
+      estimatedWaitTime: '2-5 minutes'
+    });
+    socket.disconnect(true);
+    return;
+  }
+
   connectionCount++;
-  console.log(`✅ User connected: ${socket.id} (Total: ${connectionCount})`);
+  console.log(`✅ User connected: ${socket.id} (Total: ${connectionCount}/${MAX_CONNECTIONS})`);
   connections.set(socket.id, { userId: null, activityIds: new Set() });
+  
+  // Send capacity warning if approaching limit
+  if (connectionCount >= SOFT_LIMIT) {
+    socket.emit('capacity_warning', {
+      message: 'High traffic detected - you may experience slower performance.',
+      currentConnections: connectionCount,
+      maxConnections: MAX_CONNECTIONS
+    });
+  }
+  
+  // Send welcome message with capacity info
+  socket.emit('connection_accepted', {
+    message: 'Connected successfully!',
+    currentConnections: connectionCount,
+    maxConnections: MAX_CONNECTIONS,
+    capacityLevel: connectionCount < SOFT_LIMIT ? 'normal' : 'high'
+  });
   
   // Handle create activity
   socket.on('create_activity', (data) => {
