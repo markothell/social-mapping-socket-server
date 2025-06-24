@@ -18,7 +18,7 @@ const STALE_CONNECTION_CLEANUP_INTERVAL = process.env.NODE_ENV === 'production' 
 const MAX_RETRY_ATTEMPTS = 3;
 
 // Connection limits based on server capacity
-const MAX_CONNECTIONS = process.env.MAX_CONNECTIONS || (process.env.NODE_ENV === 'production' ? 15 : 25); // Render: 15, Dev: 25
+const MAX_CONNECTIONS = process.env.MAX_CONNECTIONS || (process.env.NODE_ENV === 'production' ? 25 : 25); // Render: 25, Dev: 25
 const SOFT_LIMIT = Math.floor(MAX_CONNECTIONS * 0.8); // 80% of max = warning threshold
 
 let connectionCount = 0;
