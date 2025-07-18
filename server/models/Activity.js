@@ -165,7 +165,10 @@ const activitySchema = new Schema({
       enum: ['public', 'unlisted', 'private'],
       default: 'public'
     }
-  }
+  },
+  lineage: [{ type: String }],
+  children: [{ type: String }],
+  clonedFrom: String
 });
 
 module.exports = mongoose.model('Activity', activitySchema);

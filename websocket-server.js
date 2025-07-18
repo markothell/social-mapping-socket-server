@@ -199,7 +199,14 @@ function loadAPIRoutes() {
 console.log("MongoDB URI:", process.env.MONGODB_URI ? "Set" : "Not set");
 
 if (process.env.MONGODB_URI) {
-  mongoose.connect(process.env.MONGODB_URI, {
+  // Append socialmap1-db database name to the URI
+  const mongoUri = process.env.MONGODB_URI.includes('?') 
+    ? process.env.MONGODB_URI.replace('?', '/socialmap1-db?')
+    : process.env.MONGODB_URI + '/socialmap1-db';
+  
+  console.log("🗃️  Using database: socialmap1-db");
+  
+  mongoose.connect(mongoUri, {
     // Connection pool limits to prevent resource exhaustion
     maxPoolSize: process.env.NODE_ENV === 'production' ? 20 : 3,    // Production: 20, Dev: 3
     minPoolSize: process.env.NODE_ENV === 'production' ? 5 : 1,     // Production: 5, Dev: 1

@@ -473,6 +473,64 @@ router.patch('/:id/complete', async (req, res) => {
   }
 });
 
+// Clone activity with lineage tracking
+router.post('/:id/clone', async (req, res) => {
+  try {
+    console.log(`Cloning activity ${req.params.id}`);
+    
+    const originalActivity = await Activity.findOne({ id: req.params.id });
+    if (!originalActivity) {
+      return res.status(404).json({ message: 'Activity not found' });
+    }
+    
+    const timestamp = Date.now().toString(36);
+    const random = Math.random().toString(36).substring(2, 7);
+    const newId = `${timestamp}_${random}`;
+    
+    const clonedActivity = new Activity({
+      ...originalActivity.toObject(),
+      _id: undefined,
+      id: newId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      status: 'active',
+      phase: 'gathering',
+      participants: [],
+      tags: [],
+      mappings: [],
+      rankings: [],
+      lineage: [...(originalActivity.lineage || []), originalActivity.id],
+      children: [],
+      clonedFrom: originalActivity.id,
+      settings: {
+        ...originalActivity.settings,
+        entryView: {
+          ...originalActivity.settings.entryView,
+          title: `${originalActivity.settings.entryView?.title || 'Untitled'} (Clone)`
+        }
+      }
+    });
+    
+    const savedClone = await clonedActivity.save();
+    console.log(`Created clone with ID: ${newId}`);
+    
+    // Update parent to include this child
+    await Activity.updateOne(
+      { id: req.params.id },
+      { 
+        $push: { children: newId },
+        $set: { updatedAt: new Date() }
+      }
+    );
+    
+    console.log(`Successfully cloned activity ${req.params.id} as ${newId}`);
+    res.status(201).json(savedClone);
+  } catch (err) {
+    console.error(`Error cloning activity ${req.params.id}:`, err);
+    res.status(500).json({ message: err.message });  
+  }
+});
+
 // Load data into activity
 router.post('/:id/load-data', async (req, res) => {
   try {
