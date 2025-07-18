@@ -200,9 +200,18 @@ console.log("MongoDB URI:", process.env.MONGODB_URI ? "Set" : "Not set");
 
 if (process.env.MONGODB_URI) {
   // Append socialmap1-db database name to the URI
-  const mongoUri = process.env.MONGODB_URI.includes('?') 
-    ? process.env.MONGODB_URI.replace('?', '/socialmap1-db?')
-    : process.env.MONGODB_URI + '/socialmap1-db';
+  let mongoUri = process.env.MONGODB_URI;
+  
+  // Remove any existing database name from the URI
+  const uriParts = mongoUri.split('/');
+  if (uriParts.length > 3) {
+    // Remove the last part (database name) and any query params
+    const baseUri = uriParts.slice(0, 3).join('/');
+    const queryParams = mongoUri.includes('?') ? '?' + mongoUri.split('?')[1] : '';
+    mongoUri = baseUri + '/socialmap1-db' + queryParams;
+  } else {
+    mongoUri = mongoUri + '/socialmap1-db';
+  }
   
   console.log("🗃️  Using database: socialmap1-db");
   
